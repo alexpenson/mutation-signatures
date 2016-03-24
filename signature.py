@@ -1,8 +1,10 @@
 import numpy as np
-import matplotlib.pyplot as plt
 import string
 from scipy.optimize import basinhopping
 import pdb
+import sys
+import multiprocessing
+
 
 def make(maf_path, out_path=None, substitution_order=None):
     id_col = "Tumor_Sample_Barcode"
@@ -99,20 +101,6 @@ def make(maf_path, out_path=None, substitution_order=None):
 
     return {'substitution_order':substitution_order, 'signatures':signatures}
 
-def plot(array, ylim=0.2, ax=None):
-    color = ((0.196,0.714,0.863),)*16 + ((0.102,0.098,0.098),)*16 + ((0.816,0.180,0.192),)*16 + ((0.777,0.773,0.757),)*16 + ((0.604,0.777,0.408),)*16 + ((0.902,0.765,0.737),)*16
-    color = list(color)
-
-    width = max(array.shape)
-    x = np.arange(width)
-    if ax == None:
-        f,ax = plt.subplots(1)
-    bars = ax.bar(x, array)
-    for h in range(len(x)):
-        bars[h].set_color(color[h])
-    plt.ylim(0, ylim)
-    plt.xlim(0, width)
-
 def alogb(a,b):
     a = max(a, 0.0001)
     b = max(b, 0.0001)
@@ -156,8 +144,8 @@ def load(path):
 
 def decompose(target, sigs):
     num_muts = np.sum(target)
-    if num_muts < 1:
-        print "Warning: sample doesn't have any mutations; cancelling decomposition"
+    if num_muts < 5:
+        print "Warning: sample has less than 5 mutations; cancelling decomposition"
         return None
 
     num_sigs = sigs.shape[1]
@@ -171,20 +159,22 @@ def decompose(target, sigs):
             self.stepsize = stepsize
         def __call__(self, x):
             x += np.random.uniform(-self.stepsize, self.stepsize, np.shape(x))
-            x = x/np.linalg.norm(x)
             return x
 
     np.seterr(all="raise")
     def error(x):
         coeff = x*x
+        coeff = coeff/np.sum(coeff)
         approx = sigs.dot(coeff)
         try:
-            return np.log(-target.dot(np.log(np.maximum(approx, 0.0001)))) + 100*(np.sum(coeff) - 1)**2 # take that extra log to prioritize the correct sum
+            return -target.dot(np.log(np.maximum(approx, 0.0001))) 
         except:
             pdb.set_trace()
 
     result = basinhopping(error, seed, niter=3, disp=False, T=5, take_step=Step()).x
-    return result*result
+    result = result*result
+    result = result/np.sum(result)
+    return result
 
 def decompose_to_file(targets, sigs, sigs_names, to_file):
     to_file = open(to_file, 'w')
@@ -194,8 +184,12 @@ def decompose_to_file(targets, sigs, sigs_names, to_file):
     num_targets_decomposed = 0
     for target_name in targets:
         if num_targets_decomposed%50 == 0:
-            print "%d/%d decomposed"%(num_targets_decomposed, num_targets)
-        decomposition = decompose(targets[target_name], sigs)
+            print "%d/%d decomposed"%(num_targets_decomposed, num_targets) 
+        decomposition = None
+        try:
+            decomposition = decompose(targets[target_name], sigs)
+        except:
+            print("DECOMPOSITION EXCEPTION FOR "+target_name)
         num_targets_decomposed += 1
         if decomposition is None:
             print "Sample %s not decomposed"%target_name
@@ -207,4 +201,38 @@ def decompose_to_file(targets, sigs, sigs_names, to_file):
         to_file.write('\t')
         to_file.write(string.join(map(str, decomposition), '\t'))
         to_file.write('\n')
+    to_file.close()
+        
+def parse_decompose(arg_list):
+    target_name = arg_list[0]
+    targets = arg_list[1]
+    sigs = arg_list[2]
+    """Accessory function to retain sample name"""
+    try:
+        return [target_name, decompose(targets, sigs)]
+    except:
+        return [None, None, None]
+
+def decompose_to_file_parallel(targets, sigs, sigs_names, out_file, threads):
+    pool = multiprocessing.Pool(processes=threads)
+    manager = multiprocessing.Manager()
+    input_data = list()
+    for target_name in targets:
+        input_data.append([target_name, targets[target_name], sigs])
+    result = pool.map_async(parse_decompose, input_data)
+    pool.close()
+    pool.join()
+    results = result.get()
+   
+    ### Header
+    to_file = open(out_file, 'w')
+    to_file.write(string.join(["Sample Name", "Number of Mutations"] + sigs_names + ['\n'], '\t'))
+    
+    ### Loop over results
+    num_targets = len(targets.keys())
+    for i in range(len(results)):
+        if results[i][1] is not None:
+            out = [results[i][0], str(np.sum(targets[results[i][0]])), string.join(map(str, results[i][1]), '\t'), '\n']
+            to_file.write(string.join(out, '\t'))
+    
     to_file.close()
