@@ -5,32 +5,28 @@ old <- theme_set(theme_minimal(20))
 # Annotate maf with Stratton Plot bin
 add_mut_tri <- function(maf) {
 
-  if (!"TriNuc" %in% names(maf)) {
-    if ("Ref_Tri" %in% names(maf)) {
-      maf[, TriNuc := Ref_Tri]
+  if ("Ref_Tri" %in% names(maf)) {
+    if (!"TriNuc" %in% names(maf)) {
+      maf[, Ref_Tri := TriNuc]
     } else {
       stop("must have either Ref_Tri or TriNuc column")
     }
   }
 
-  if (!'t_var_freq' %in% names(maf)) maf[!t_ref_count %in% c(NA,'.') & !t_alt_count %in% c(NA,'.'),
-                                         t_var_freq := as.numeric(t_alt_count)/(as.numeric(t_alt_count)+as.numeric(t_ref_count))]
+  ### check for t_var_freq
+  if (!'t_var_freq' %in% names(maf))
+    maf[!t_ref_count %in% c(NA,'.') & !t_alt_count %in% c(NA,'.'),
+        t_var_freq := as.numeric(t_alt_count)/(as.numeric(t_alt_count)+as.numeric(t_ref_count))]
 
-  maf[, c('TriNuc_CT', 'Tumor_Seq_Allele2_CT', 'Mut_Tri') := 'X']
-  maf[Variant_Type == "SNP" & !is.na(Reference_Allele) & !is.na(t_var_freq) & !is.na(TriNuc),
-      TriNuc_CT := ifelse(Reference_Allele %in% c("G", "A"),
-                          as.character(Biostrings::reverseComplement(Biostrings::DNAStringSet(TriNuc))),
-                          TriNuc)]
+  ### reverse complement if ref is either G or A
+  maf[Variant_Type == "SNP" & str_sub(Ref_Tri, 2, 2) %in% c('G', 'A'),
+      Ref_Tri := rev(chartr('ACGT', 'TGCA', Ref_Tri))]
 
-  maf[Variant_Type == "SNP" & !is.na(Reference_Allele) & !is.na(t_var_freq) & !is.na(Tumor_Seq_Allele2),
-      Tumor_Seq_Allele2_CT := ifelse(Reference_Allele %in% c("G", "A"),
-                                     as.character(Biostrings::reverseComplement(Biostrings::DNAStringSet(Tumor_Seq_Allele2))),
-                                     Tumor_Seq_Allele2)]
-
-  maf[Variant_Type == "SNP" & !is.na(TriNuc_CT) & !is.na(Tumor_Seq_Allele2_CT),
-      Mut_Tri := paste0(substr(TriNuc_CT, 1, 2),
-                        Tumor_Seq_Allele2_CT,
-                        substr(TriNuc_CT, 3, 3))]
+  ### set Mut_Tri: for example, a C>A mutation with the context ACA > AAA becomes ACAA
+  maf[Variant_Type == "SNP",
+      Mut_Tri := paste0(substr(Ref_Tri, 1, 2),
+                        Tumor_Seq_Allele2,
+                        substr(Ref_Tri, 3, 3))]
 
   maf
 }
@@ -72,11 +68,11 @@ stratton_plot <- function(maf){
           panel.grid.minor = element_blank(),
           axis.ticks = element_blank(),
           strip.text.y = element_text(angle=0),
-          axis.text.x = element_text(size = rel(0.2), angle = 90),
+          axis.text.x = element_text(size = rel(0.3), angle = 90),
 #          axis.title.y=element_text(vjust=1),
           panel.margin = unit(0, "cm")) +
     xlab("") +
-    ylab("Fraction of Mutations") +
+    ylab("Number of Mutations") +
       theme(legend.text=element_text(size=16, family="Courier"))
   # ggsave(file=paste0(gsub(".txt$", "_stratton_plot.pdf", summ_file)),
   #                    width = 15, height = 3)
